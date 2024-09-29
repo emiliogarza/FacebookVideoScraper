@@ -1,134 +1,84 @@
 import { URL } from 'url';
 import puppeteer from "puppeteer";
+import fs from 'fs';
+import https from 'https';
+
 const iPhone = puppeteer.devices['iPhone 6'];
-const browser = await puppeteer.launch({ headless: false });
+const browser = await puppeteer.launch({ 
+    executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    headless: false 
+});
 
 export default class Scraper {
     
-    async facebook(url) {
+async facebook(url) {
 
         const link = new URL(url);
+        let downloadUrl;
+        let fileName;
+        const page = await browser.newPage();
+        await page.emulate(iPhone);
 
         if (!["www.facebook.com", "facebook.com", "www.fb.com", "fb.com", "m.facebook.com", "fb.watch"].includes(link.host)) {
             return {
                 "success": false,
-                "message": "URL inválido! verifique se o link é do facebook."
+                "message": "Invalid URL"
             }
         }
-
-        if (url.includes("watch")) {
-            return FacebookWatch(link);
-        } else {
-            return Facebook(link);
+        let videoUrl = await getVideoUrl(link, page);
+        if (videoUrl) {
+            downloadUrl = videoUrl.url;
+            fileName = formatFileName(videoUrl.publishedDate);
+            https.get(downloadUrl, res => {
+                const stream = fs.createWriteStream("./output/" + fileName);
+                res.pipe(stream);
+                stream.on('finish', () => {
+                    stream.close();
+                })
+            })
         }
-
+        console.log("Successfully scraped: " + url);
+        console.log("Video Saved As: " + fileName);
+        return {
+            "success": true
+        }
     }
 
 }
 
-async function Facebook(url) {
-
-    const page = await browser.newPage();
-    //await page.emulate(iPhone);
+async function getVideoUrl(url, page) {
     await page.goto("http://m.facebook.com" + url.href.substring(url.origin.length, url.href.length));
 
-    const exists = await page.$eval('#m_story_permalink_view > div > div > div > div > section > div > div > i', () => true).catch(() => false)
-    if (!exists) {
-        await page.close();
-        return {
-            "success": false,
-            "message": "Erro ao selecionar vídeo, a estrutura pode ter sido alterada!"
-        }
-    }
-
-    await page.click('#m_story_permalink_view > div > div > div > div > section > div > div > i')
-        .catch((error) => {
-            console.log(error);
-            return {
-                "success": false,
-                "message": "Erro ao selecionar vídeo, a estrutura pode ter sido alterada!"
-            }
-        });
-
-    await page.waitForSelector('#m_story_permalink_view > div > div > div > div > section > div > div > video', { visible: true })
-
+    await page.waitForNetworkIdle();
     const videoUrl = await page.evaluate(() => {
         try {
-            return document.querySelector("#m_story_permalink_view > div > div > div > div > section > div > div > video").src;
+            return document.querySelector(".displayed [data-video-url]").getAttribute("data-video-url");
         } catch (err) {
-            console.log('Erro ao selecionar vídeo, a estrutura pode ter sido alterada!')
-            return false
+            console.error('Couldn\'t retrieve the URL from the Video element Error: ' + err)
+            return null;
+        }
+    })
+    const publishedDate = await page.evaluate(() => {
+        try {
+            let dateRaw = document.querySelector("div.displayed div.m div.m div.m div.native-text span.f5").innerHTML;
+            return dateRaw.replace(/\W/g, '');
+        } catch (err) {
+            console.log('Couldn\'t retrieve the Date of the video: ' + err)
+            return null;
         }
     })
 
-    if (!videoUrl) {
-        await page.close();
-        return {
-            "success": false,
-            "message": "Erro ao selecionar vídeo, a estrutura pode ter sido alterada!"
-        }
-    }
-
-    await page.close();
+    
     return {
         "success": true,
-        "url": videoUrl
+        "url": videoUrl,
+        "publishedDate": publishedDate ? publishedDate : null
     }
-
 }
 
-async function FacebookWatch(url) {
-
-    const page = await browser.newPage();
-    await page.emulate(iPhone);
-    await page.goto(url);
-
-    const checkSelector = await page.evaluate(() => {
-        try {
-            return document.querySelector(".widePic > div > i");
-        } catch (err) {
-            console.log(err);
-            return false
-        }
-    })
-
-    if (!checkSelector) {
-        await page.close();
-        return {
-            "success": false,
-            "message": "Erro ao selecionar vídeo, a estrutura pode ter sido alterada!"
-        }
+function formatFileName(publishedDate) {
+    if (publishedDate) {
+        return publishedDate.split(' ').join('-') + '.mp4';
     }
-
-    await page.click('.widePic > div > i')
-        .catch((error) => {
-            console.log(error);
-        });
-
-    await page.waitForSelector('.widePic > div> video', { visible: true })
-
-    const videoUrl = await page.evaluate(() => {
-        try {
-            return document.querySelector(".widePic > div > video").src;
-        } catch (err) {
-            console.log('Erro ao selecionar vídeo, a estrutura pode ter sido alterada!')
-            return false
-        }
-    })
-
-    if (!videoUrl) {
-        await page.close();
-        return {
-            "success": false,
-            "message": "Erro ao selecionar vídeo, a estrutura pode ter sido alterada!"
-        }
-    }
-
-    await page.close();
-
-    return {
-        "success": true,
-        "url": videoUrl
-    }
-
+    return null;
 }
